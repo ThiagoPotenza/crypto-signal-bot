@@ -1,0 +1,265 @@
+"""
+Cliente Binance para coleta de dados de mercado em tempo real
+"""
+
+import asyncio
+import json
+from typing import Dict, List, Optional, Callable
+from binance import AsyncClient, BinanceSocketManager
+from loguru import logger
+
+from ..models.market_data import MarketData
+from ..config import settings
+
+
+class BinanceClient:
+    """Cliente para interação com a API da Binance"""
+    
+    def __init__(self, data_processor=None):
+        self.client: Optional[AsyncClient] = None
+        self.socket_manager: Optional[BinanceSocketManager] = None
+        self.data_processor = data_processor
+        self.active_streams: Dict[str, any] = {}
+        self.is_initialized = False
+        
+    async def initialize(self):
+        """Inicializa o cliente Binance"""
+        try:
+            # Criar cliente assíncrono
+            self.client = await AsyncClient.create(
+                api_key=settings.BINANCE_API_KEY,
+                api_secret=settings.BINANCE_SECRET_KEY,
+                testnet=settings.BINANCE_TESTNET
+            )
+            
+            # Criar gerenciador de socket
+            self.socket_manager = BinanceSocketManager(self.client)
+            
+            self.is_initialized = True
+            logger.info("Cliente Binance inicializado com sucesso")
+            
+        except Exception as e:
+            logger.error(f"Erro ao inicializar cliente Binance: {e}")
+            raise
+    
+    async def _handle_kline_message(self, msg):
+        """Processa mensagens de kline da Binance"""
+        try:
+            if 'k' in msg:
+                kline = msg['k']
+                
+                # Log para debug - apenas a cada 10 mensagens para não poluir
+                if int(kline['t']) % 600000 == 0:  # A cada 10 minutos
+                    logger.info(f"📊 Kline recebido: {kline['s']} - {kline['i']} - Preço: {kline['c']}")
+                
+                market_data = MarketData(
+                    symbol=kline['s'],
+                    interval=kline['i'],
+                    open_time=int(kline['t']),
+                    close_time=int(kline['T']),
+                    open_price=float(kline['o']),
+                    high_price=float(kline['h']),
+                    low_price=float(kline['l']),
+                    close_price=float(kline['c']),
+                    volume=float(kline['v']),
+                    number_of_trades=int(kline['n']),
+                    is_closed=kline['x']
+                )
+                
+                # Processar dados se o processador estiver disponível
+                if self.data_processor:
+                    await self.data_processor.process_kline_data(market_data)
+                
+        except Exception as e:
+            logger.error(f"❌ Erro ao processar kline: {e}")
+    
+    async def _handle_ticker_message(self, msg):
+        """Processa mensagens de ticker da Binance"""
+        try:
+            # Log para debug - apenas ocasionalmente
+            if msg['s'] == 'BTCUSDT':  # Log apenas para Bitcoin para não poluir
+                logger.info(f"💰 Ticker recebido: {msg['s']} - Preço: {msg['c']}")
+            
+            ticker_data = {
+                'symbol': msg['s'],
+                'price': float(msg['c']),
+                'change': float(msg['P']),
+                'volume': float(msg['v']),
+                'timestamp': int(msg['E'])
+            }
+            
+            # Processar dados se o processador estiver disponível
+            if self.data_processor:
+                await self.data_processor.process_ticker_data(ticker_data)
+                
+        except Exception as e:
+            logger.error(f"❌ Erro ao processar ticker: {e}")
+    
+    async def start_kline_stream(self, symbol: str, interval: str):
+        """Inicia stream de klines para um símbolo e intervalo"""
+        try:
+            if not self.is_initialized:
+                await self.initialize()
+            
+            stream_key = f"kline_{symbol}_{interval}"
+            
+            # Evitar streams duplicados
+            if stream_key in self.active_streams:
+                logger.warning(f"Stream {stream_key} já está ativo")
+                return
+            
+            # Criar stream de kline
+            stream = self.socket_manager.kline_socket(
+                symbol=symbol.lower(),
+                interval=interval
+            )
+            
+            # Iniciar stream
+            async with stream as socket:
+                self.active_streams[stream_key] = socket
+                logger.info(f"Stream de klines iniciado para {symbol} - {interval}")
+                
+                async for msg in socket:
+                    await self._handle_kline_message(msg)
+                    
+        except Exception as e:
+            logger.error(f"Erro no stream de klines {symbol} - {interval}: {e}")
+            # Remover da lista de streams ativos em caso de erro
+            if stream_key in self.active_streams:
+                del self.active_streams[stream_key]
+    
+    async def start_ticker_stream(self, symbol: str):
+        """Inicia stream de ticker para um símbolo"""
+        try:
+            if not self.is_initialized:
+                await self.initialize()
+            
+            stream_key = f"ticker_{symbol}"
+            
+            # Evitar streams duplicados
+            if stream_key in self.active_streams:
+                logger.warning(f"Stream {stream_key} já está ativo")
+                return
+            
+            # Criar stream de ticker
+            stream = self.socket_manager.symbol_ticker_socket(symbol=symbol.lower())
+            
+            # Iniciar stream
+            async with stream as socket:
+                self.active_streams[stream_key] = socket
+                logger.info(f"Stream de ticker iniciado para {symbol}")
+                
+                async for msg in socket:
+                    await self._handle_ticker_message(msg)
+                    
+        except Exception as e:
+            logger.error(f"Erro no stream de ticker {symbol}: {e}")
+            # Remover da lista de streams ativos em caso de erro
+            if stream_key in self.active_streams:
+                del self.active_streams[stream_key]
+    
+    async def get_historical_klines(self, symbol: str, interval: str, limit: int = 100):
+        """Obtém dados históricos de klines"""
+        try:
+            if not self.is_initialized:
+                await self.initialize()
+            
+            klines = await self.client.get_historical_klines(
+                symbol=symbol,
+                interval=interval,
+                limit=limit
+            )
+            
+            processed_klines = []
+            for kline in klines:
+                market_data = MarketData(
+                    symbol=symbol,
+                    interval=interval,
+                    open_time=int(kline[0]),
+                    close_time=int(kline[6]),
+                    open_price=float(kline[1]),
+                    high_price=float(kline[2]),
+                    low_price=float(kline[3]),
+                    close_price=float(kline[4]),
+                    volume=float(kline[5]),
+                    number_of_trades=int(kline[8]),
+                    is_closed=True
+                )
+                processed_klines.append(market_data)
+            
+            logger.info(f"Obtidos {len(processed_klines)} klines históricos para {symbol} - {interval}")
+            return processed_klines
+            
+        except Exception as e:
+            logger.error(f"Erro ao obter klines históricos: {e}")
+            return []
+    
+    async def get_ticker_price(self, symbol: str) -> Optional[float]:
+        """Obtém preço atual de um símbolo"""
+        try:
+            if not self.is_initialized:
+                await self.initialize()
+            
+            ticker = await self.client.get_symbol_ticker(symbol=symbol)
+            return float(ticker['price'])
+            
+        except Exception as e:
+            logger.error(f"Erro ao obter preço do ticker {symbol}: {e}")
+            return None
+    
+    async def test_connectivity(self) -> bool:
+        """Testa conectividade com a Binance"""
+        try:
+            if not self.is_initialized:
+                await self.initialize()
+            
+            # Testar conectividade
+            await self.client.ping()
+            
+            # Testar autenticação (se as chaves estiverem configuradas)
+            if settings.BINANCE_API_KEY and settings.BINANCE_SECRET_KEY:
+                account = await self.client.get_account()
+                logger.info("✅ Conectividade e autenticação Binance OK")
+                return True
+            else:
+                logger.info("✅ Conectividade Binance OK (sem autenticação)")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Falha na conectividade Binance: {e}")
+            return False
+    
+    def get_active_streams(self) -> List[str]:
+        """Retorna lista de streams ativos"""
+        return list(self.active_streams.keys())
+    
+    def get_stream_count(self) -> int:
+        """Retorna número de streams ativos"""
+        return len(self.active_streams)
+    
+    async def close(self):
+        """Fecha conexões e limpa recursos"""
+        try:
+            # Parar todos os streams ativos
+            for stream_key in list(self.active_streams.keys()):
+                try:
+                    # Os streams serão fechados automaticamente quando o socket manager for fechado
+                    pass
+                except Exception as e:
+                    logger.warning(f"Erro ao fechar stream {stream_key}: {e}")
+            
+            self.active_streams.clear()
+            
+            # Fechar socket manager
+            if self.socket_manager:
+                await self.socket_manager.close()
+            
+            # Fechar cliente
+            if self.client:
+                await self.client.close_connection()
+            
+            self.is_initialized = False
+            logger.info("Cliente Binance fechado")
+            
+        except Exception as e:
+            logger.error(f"Erro ao fechar cliente Binance: {e}")

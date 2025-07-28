@@ -1,0 +1,750 @@
+import os
+from typing import List, Dict, Any, Optional
+from datetime import datetime, timedelta
+from dataclasses import dataclass
+
+# ================================
+# 🔧 CONFIGURAÇÕES DE CONEXÃO
+# ================================
+
+# PostgreSQL
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "postgres")
+POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
+POSTGRES_DB = os.getenv("POSTGRES_DB", "market_data")
+POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres123")
+
+# Redis
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+
+# ================================
+# 🌐 CONFIGURAÇÕES BINANCE API
+# ================================
+
+# APIs da Binance por mercado
+BINANCE_APIS = {
+    "spot": {
+        "base_url": "https://api.binance.com",
+        "ws_url": "wss://stream.binance.com:9443/ws/",
+        "endpoints": {
+            "klines": "/api/v3/klines",
+            "exchange_info": "/api/v3/exchangeInfo",
+            "ticker": "/api/v3/ticker/24hr",
+            "depth": "/api/v3/depth",
+            "trades": "/api/v3/trades",
+            "avg_price": "/api/v3/avgPrice",
+            "price": "/api/v3/ticker/price"
+        }
+    },
+    "futures": {
+        "base_url": "https://fapi.binance.com",
+        "ws_url": "wss://fstream.binance.com/ws/",
+        "endpoints": {
+            "klines": "/fapi/v1/klines",
+            "exchange_info": "/fapi/v1/exchangeInfo",
+            "ticker": "/fapi/v1/ticker/24hr",
+            "depth": "/fapi/v1/depth",
+            "trades": "/fapi/v1/trades",
+            "avg_price": "/fapi/v1/avgPrice",
+            "price": "/fapi/v1/ticker/price"
+        }
+    },
+    "coin_futures": {
+        "base_url": "https://dapi.binance.com",
+        "ws_url": "wss://dstream.binance.com/ws/",
+        "endpoints": {
+            "klines": "/dapi/v1/klines",
+            "exchange_info": "/dapi/v1/exchangeInfo",
+            "ticker": "/dapi/v1/ticker/24hr",
+            "depth": "/dapi/v1/depth",
+            "trades": "/dapi/v1/trades",
+            "avg_price": "/dapi/v1/avgPrice",
+            "price": "/dapi/v1/ticker/price"
+        }
+    }
+}
+
+# ================================
+# 📊 CONFIGURAÇÕES DE MERCADO
+# ================================
+
+# Intervalos de tempo (maiores primeiro para otimização)
+INTERVALS = ["1d", "4h", "1h", "15m", "5m", "1m"]
+
+# Configurações por mercado
+MARKET_CONFIG = {
+    "spot": {
+        "enabled": True,
+        "symbols_limit": 200,
+        "intervals": INTERVALS,
+        "websocket_limit": 50,
+        "rate_limit": 1200,
+        "weight_limit": 6000,
+        "max_connections": 5
+    },
+    "futures": {
+        "enabled": True,
+        "symbols_limit": 150,
+        "intervals": INTERVALS,
+        "websocket_limit": 50,
+        "rate_limit": 2400,
+        "weight_limit": 12000,
+        "max_connections": 5
+    },
+    "coin_futures": {
+        "enabled": True,
+        "symbols_limit": 100,
+        "intervals": INTERVALS,
+        "websocket_limit": 50,
+        "rate_limit": 1200,
+        "weight_limit": 6000,
+        "max_connections": 3
+    }
+}
+
+# Mercados habilitados
+ENABLED_MARKETS = ["spot", "futures", "coin_futures"]
+
+# ================================
+# 🚀 CONFIGURAÇÕES DE PERFORMANCE
+# ================================
+
+# Batch sizes otimizados
+BATCH_SIZE = 5000  # Era 1000
+CONCURRENT_REQUESTS = 5  # Era 3
+MAX_RETRIES = 3
+RETRY_DELAY = 2
+
+# Timeouts
+REQUEST_TIMEOUT = 30
+CONNECTION_TIMEOUT = 10
+WEBSOCKET_TIMEOUT = 60
+POOL_TIMEOUT = 30
+
+# ================================
+# 📈 SÍMBOLOS E PRIORIDADES
+# ================================
+
+# Símbolos principais (mais líquidos primeiro)
+PRIORITY_SYMBOLS = [
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "XRPUSDT",
+    "SOLUSDT", "DOTUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT",
+    "MATICUSDT", "LTCUSDT", "UNIUSDT", "ATOMUSDT", "FILUSDT",
+    "SHIBUSDT", "TRXUSDT", "NEARUSDT", "ALGOUSDT", "VETUSDT",
+    "ICPUSDT", "FTMUSDT", "SANDUSDT", "MANAUSDT", "AXSUSDT",
+    "CHZUSDT", "ENJUSDT", "GALAUSDT", "FLOWUSDT", "HBARUSDT"
+]
+
+# Filtros de símbolos
+SYMBOL_FILTERS = {
+    "min_volume_24h": 1000000,  # Volume mínimo 24h em USDT
+    "exclude_patterns": ["UP", "DOWN", "BULL", "BEAR"],
+    "include_only_usdt": True,
+    "exclude_leveraged": True,
+    "min_price": 0.0001,
+    "max_price": 100000
+}
+
+# ================================
+# 📅 CONFIGURAÇÕES HISTÓRICAS
+# ================================
+
+# Período histórico (10 anos)
+HISTORICAL_DAYS = 3650
+START_DATE = datetime.now() - timedelta(days=HISTORICAL_DAYS)
+
+# Configurações de coleta
+SKIP_EXISTING_DATA = True
+IGNORE_COLLECTION_ERRORS = True
+CACHE_SYMBOLS = True
+SMART_INTERVALS = True
+BATCH_OPTIMIZATION = True
+
+# ================================
+# 🔌 CONFIGURAÇÕES WEBSOCKET
+# ================================
+
+# Configurações de conexão
+MAX_WEBSOCKET_CONNECTIONS = 10
+WEBSOCKET_RECONNECT_DELAY = 15
+WEBSOCKET_PING_INTERVAL = 30
+WEBSOCKET_PONG_TIMEOUT = 10
+WEBSOCKET_MAX_RETRIES = 5
+
+# Batch de símbolos por conexão
+SYMBOLS_PER_WEBSOCKET = 50
+
+# Configurações de stream
+STREAM_CONFIG = {
+    "kline": True,
+    "ticker": True,
+    "depth": False,  # Desabilitado por padrão (muito dados)
+    "trades": False,  # Desabilitado por padrão (muito dados)
+    "miniTicker": True,
+    "bookTicker": False
+}
+
+# ================================
+# 📈 CONFIGURAÇÕES DE TRADING
+# ================================
+
+# Configurações do bot de trading
+TRADING_ENABLED = False  # Desabilitado por padrão
+PAPER_TRADING = True     # Modo simulação
+AUTO_TRADING = False
+
+# Estratégias habilitadas
+STRATEGIES = {
+    "scalper": {
+        "enabled": True,
+        "timeframes": ["1m", "5m"],
+        "max_positions": 5,
+        "risk_per_trade": 0.01,
+        "min_profit": 0.005
+    },
+    "daytrading": {
+        "enabled": True,
+        "timeframes": ["15m", "1h"],
+        "max_positions": 3,
+        "risk_per_trade": 0.02,
+        "min_profit": 0.015
+    },
+    "swingtrading": {
+        "enabled": True,
+        "timeframes": ["4h", "1d"],
+        "max_positions": 2,
+        "risk_per_trade": 0.03,
+        "min_profit": 0.05
+    },
+    "holding": {
+        "enabled": True,
+        "timeframes": ["1d"],
+        "max_positions": 1,
+        "risk_per_trade": 0.05,
+        "min_profit": 0.20
+    }
+}
+
+# Configurações de risco
+RISK_MANAGEMENT = {
+    "max_portfolio_risk": 0.02,  # 2% do portfolio
+    "max_position_size": 0.1,    # 10% do portfolio
+    "stop_loss": 0.02,           # 2% stop loss
+    "take_profit": 0.06,         # 6% take profit
+    "trailing_stop": True,
+    "trailing_gain": True,
+    "max_drawdown": 0.15,        # 15% drawdown máximo
+    "daily_loss_limit": 0.05     # 5% perda diária máxima
+}
+
+# ================================
+# 🛡️ CONFIGURAÇÕES DE SEGURANÇA
+# ================================
+
+# API Keys (usar variáveis de ambiente)
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
+BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
+
+# Configurações de rate limit
+RATE_LIMIT_REQUESTS = 1200  # Por minuto
+RATE_LIMIT_WEIGHT = 6000    # Por minuto
+
+# Configurações de IP
+ALLOWED_IPS = ["0.0.0.0/0"]  # Permitir todos por padrão
+WHITELIST_ENABLED = False
+
+# Configurações de autenticação
+API_KEY_REQUIRED = False
+JWT_SECRET = os.getenv("JWT_SECRET", "crypto-signal-bot-secret")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION = 24 * 60 * 60  # 24 horas
+
+# ================================
+# 📝 CONFIGURAÇÕES DE LOG
+# ================================
+
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_FORMAT = "%(asctime)s.%(msecs)03d | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d - %(message)s"
+LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+# Configurações de arquivo de log
+LOG_FILE_ENABLED = True
+LOG_FILE_PATH = "logs/market_data.log"
+LOG_FILE_MAX_SIZE = 100 * 1024 * 1024  # 100MB
+LOG_FILE_BACKUP_COUNT = 5
+
+# Configurações de log por nível
+LOG_LEVELS = {
+    "DEBUG": 10,
+    "INFO": 20,
+    "WARNING": 30,
+    "ERROR": 40,
+    "CRITICAL": 50
+}
+
+# ================================
+# 🌍 CONFIGURAÇÕES DE AMBIENTE
+# ================================
+
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+DEBUG = ENVIRONMENT == "development"
+TESTING = ENVIRONMENT == "testing"
+PRODUCTION = ENVIRONMENT == "production"
+
+# URLs da API Binance (compatibilidade)
+BINANCE_BASE_URL = "https://api.binance.com"
+BINANCE_FUTURES_URL = "https://fapi.binance.com"
+BINANCE_COIN_FUTURES_URL = "https://dapi.binance.com"
+
+# WebSocket URLs (compatibilidade)
+BINANCE_WS_URL = "wss://stream.binance.com:9443/ws/"
+BINANCE_FUTURES_WS_URL = "wss://fstream.binance.com/ws/"
+BINANCE_COIN_FUTURES_WS_URL = "wss://dstream.binance.com/ws/"
+
+# ================================
+# 📊 CONFIGURAÇÕES DE RELATÓRIOS
+# ================================
+
+# Relatórios automáticos
+DAILY_REPORT_ENABLED = True
+DAILY_REPORT_TIME = "08:00"  # Horário de Brasília
+WEEKLY_REPORT_ENABLED = True
+MONTHLY_REPORT_ENABLED = True
+
+# Métricas de performance
+PERFORMANCE_METRICS = {
+    "track_latency": True,
+    "track_throughput": True,
+    "track_errors": True,
+    "track_memory": True,
+    "track_websocket_health": True,
+    "track_database_performance": True
+}
+
+# Alertas
+ALERTS_CONFIG = {
+    "enabled": True,
+    "email_enabled": False,
+    "telegram_enabled": False,
+    "discord_enabled": False,
+    "slack_enabled": False,
+    "error_threshold": 10,      # Erros por minuto
+    "latency_threshold": 5000,  # ms
+    "memory_threshold": 80,     # % de uso
+    "disk_threshold": 90        # % de uso
+}
+
+# ================================
+# 🔧 CONFIGURAÇÕES AVANÇADAS
+# ================================
+
+# Pool de conexões PostgreSQL
+POSTGRES_POOL_SIZE = 20
+POSTGRES_MAX_OVERFLOW = 30
+POSTGRES_POOL_TIMEOUT = 30
+POSTGRES_POOL_RECYCLE = 3600
+
+# Cache Redis
+REDIS_CACHE_TTL = 3600  # 1 hora
+REDIS_MAX_CONNECTIONS = 50
+REDIS_SOCKET_TIMEOUT = 5
+REDIS_CONNECTION_POOL_SIZE = 20
+
+# Otimizações
+CONCURRENT_OPTIMIZATION = True
+MEMORY_OPTIMIZATION = True
+CPU_OPTIMIZATION = True
+
+# Configurações de backup
+BACKUP_ENABLED = False
+BACKUP_INTERVAL_HOURS = 24
+BACKUP_RETENTION_DAYS = 30
+BACKUP_COMPRESSION = True
+
+# Configurações de monitoramento
+MONITORING_ENABLED = True
+METRICS_ENABLED = True
+HEALTH_CHECK_ENABLED = True
+PROFILING_ENABLED = DEBUG
+
+# ================================
+# 🔌 FUNÇÕES AUXILIARES
+# ================================
+
+def get_websocket_url(market: str) -> str:
+    """Retorna URL do WebSocket para o mercado especificado"""
+    return BINANCE_APIS.get(market, {}).get("ws_url", "")
+
+def get_api_base_url(market: str) -> str:
+    """Retorna URL base da API para o mercado especificado"""
+    return BINANCE_APIS.get(market, {}).get("base_url", "")
+
+def get_api_endpoint(market: str, endpoint: str) -> str:
+    """Retorna endpoint específico para o mercado"""
+    endpoints = BINANCE_APIS.get(market, {}).get("endpoints", {})
+    return endpoints.get(endpoint, "")
+
+def get_database_url() -> str:
+    """Retorna URL de conexão do PostgreSQL"""
+    return f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+
+def get_redis_url() -> str:
+    """Retorna URL de conexão do Redis"""
+    return f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
+
+def is_market_enabled(market: str) -> bool:
+    """Verifica se um mercado está habilitado"""
+    return market in ENABLED_MARKETS and MARKET_CONFIG.get(market, {}).get("enabled", False)
+
+def get_market_symbols_limit(market: str) -> int:
+    """Retorna limite de símbolos para um mercado"""
+    return MARKET_CONFIG.get(market, {}).get("symbols_limit", 100)
+
+def get_market_rate_limit(market: str) -> int:
+    """Retorna rate limit para um mercado"""
+    return MARKET_CONFIG.get(market, {}).get("rate_limit", 1200)
+
+def get_market_weight_limit(market: str) -> int:
+    """Retorna weight limit para um mercado"""
+    return MARKET_CONFIG.get(market, {}).get("weight_limit", 6000)
+
+def get_intervals_for_market(market: str) -> List[str]:
+    """Retorna intervalos suportados para um mercado"""
+    return MARKET_CONFIG.get(market, {}).get("intervals", INTERVALS)
+
+def get_all_symbols() -> List[str]:
+    """Retorna todos os símbolos configurados"""
+    return PRIORITY_SYMBOLS.copy()
+
+def get_symbols_for_market(market: str) -> List[str]:
+    """Retorna símbolos específicos para um mercado"""
+    limit = get_market_symbols_limit(market)
+    return PRIORITY_SYMBOLS[:limit]
+
+def filter_symbols(symbols: List[str], market: str = "spot") -> List[str]:
+    """Filtra símbolos baseado nas configurações"""
+    filtered = []
+    for symbol in symbols:
+        # Aplicar filtros
+        if SYMBOL_FILTERS.get("include_only_usdt", True) and not symbol.endswith("USDT"):
+            continue
+        
+        # Excluir padrões específicos
+        exclude_patterns = SYMBOL_FILTERS.get("exclude_patterns", [])
+        if any(pattern in symbol for pattern in exclude_patterns):
+            continue
+            
+        filtered.append(symbol)
+    
+    return filtered
+
+def get_enabled_intervals(market: str = "spot") -> List[str]:
+    """Retorna intervalos habilitados para um mercado"""
+    return get_intervals_for_market(market)
+
+def get_market_config(market: str) -> Dict[str, Any]:
+    """Retorna configuração completa de um mercado"""
+    return MARKET_CONFIG.get(market, {})
+
+def get_binance_api_config(market: str) -> Dict[str, Any]:
+    """Retorna configuração da API Binance para um mercado"""
+    return BINANCE_APIS.get(market, {})
+
+def get_stream_config() -> Dict[str, bool]:
+    """Retorna configuração de streams"""
+    return STREAM_CONFIG.copy()
+
+def get_risk_config() -> Dict[str, Any]:
+    """Retorna configuração de risco"""
+    return RISK_MANAGEMENT.copy()
+
+def get_strategy_config(strategy: str) -> Dict[str, Any]:
+    """Retorna configuração de uma estratégia específica"""
+    return STRATEGIES.get(strategy, {})
+
+def get_enabled_strategies() -> List[str]:
+    """Retorna lista de estratégias habilitadas"""
+    return [name for name, config in STRATEGIES.items() if config.get("enabled", False)]
+
+def get_performance_config() -> Dict[str, bool]:
+    """Retorna configuração de métricas de performance"""
+    return PERFORMANCE_METRICS.copy()
+
+def get_alerts_config() -> Dict[str, Any]:
+    """Retorna configuração de alertas"""
+    return ALERTS_CONFIG.copy()
+
+def validate_symbol(symbol: str) -> bool:
+    """Valida se um símbolo está no formato correto"""
+    return isinstance(symbol, str) and len(symbol) >= 6 and symbol.isupper()
+
+def validate_interval(interval: str) -> bool:
+    """Valida se um intervalo é suportado"""
+    return interval in INTERVALS
+
+def validate_market(market: str) -> bool:
+    """Valida se um mercado é suportado"""
+    return market in ENABLED_MARKETS
+
+def get_default_symbols(limit: int = 20) -> List[str]:
+    """Retorna símbolos padrão limitados"""
+    return PRIORITY_SYMBOLS[:limit]
+
+def get_symbol_filters() -> Dict[str, Any]:
+    """Retorna filtros de símbolos"""
+    return SYMBOL_FILTERS.copy()
+
+# ================================
+# 🔧 CLASSE SETTINGS (COMPATIBILIDADE)
+# ================================
+
+@dataclass
+class DatabaseConfig:
+    """Configurações do banco de dados"""
+    host: str = POSTGRES_HOST
+    port: int = POSTGRES_PORT
+    database: str = POSTGRES_DB
+    username: str = POSTGRES_USER
+    password: str = POSTGRES_PASSWORD
+    pool_size: int = POSTGRES_POOL_SIZE
+    max_overflow: int = POSTGRES_MAX_OVERFLOW
+    pool_timeout: int = POSTGRES_POOL_TIMEOUT
+
+@dataclass
+class RedisConfig:
+    """Configurações do Redis"""
+    host: str = REDIS_HOST
+    port: int = REDIS_PORT
+    db: int = REDIS_DB
+    max_connections: int = REDIS_MAX_CONNECTIONS
+    socket_timeout: int = REDIS_SOCKET_TIMEOUT
+    connection_pool_size: int = REDIS_CONNECTION_POOL_SIZE
+
+class Settings:
+    """Classe de configurações para compatibilidade com código legado"""
+    
+    def __init__(self):
+        # Configurações de conexão
+        self.postgres_host = POSTGRES_HOST
+        self.postgres_port = POSTGRES_PORT
+        self.postgres_db = POSTGRES_DB
+        self.postgres_user = POSTGRES_USER
+        self.postgres_password = POSTGRES_PASSWORD
+        
+        self.redis_host = REDIS_HOST
+        self.redis_port = REDIS_PORT
+        self.redis_db = REDIS_DB
+        
+        # Configurações de API
+        self.binance_api_key = BINANCE_API_KEY
+        self.binance_secret_key = BINANCE_SECRET_KEY
+        
+        # Configurações de performance
+        self.batch_size = BATCH_SIZE
+        self.concurrent_requests = CONCURRENT_REQUESTS
+        self.max_retries = MAX_RETRIES
+        self.request_timeout = REQUEST_TIMEOUT
+        self.connection_timeout = CONNECTION_TIMEOUT
+        
+        # Configurações de mercado
+        self.enabled_markets = ENABLED_MARKETS
+        self.intervals = INTERVALS
+        self.priority_symbols = PRIORITY_SYMBOLS
+        self.market_config = MARKET_CONFIG
+        self.binance_apis = BINANCE_APIS
+        
+        # Configurações de log
+        self.log_level = LOG_LEVEL
+        self.log_format = LOG_FORMAT
+        self.log_file_enabled = LOG_FILE_ENABLED
+        self.log_file_path = LOG_FILE_PATH
+        
+        # Configurações de ambiente
+        self.environment = ENVIRONMENT
+        self.debug = DEBUG
+        self.testing = TESTING
+        self.production = PRODUCTION
+        
+        # Configurações históricas
+        self.historical_days = HISTORICAL_DAYS
+        self.skip_existing_data = SKIP_EXISTING_DATA
+        self.start_date = START_DATE
+        
+        # Configurações de WebSocket
+        self.max_websocket_connections = MAX_WEBSOCKET_CONNECTIONS
+        self.websocket_reconnect_delay = WEBSOCKET_RECONNECT_DELAY
+        self.symbols_per_websocket = SYMBOLS_PER_WEBSOCKET
+        self.websocket_timeout = WEBSOCKET_TIMEOUT
+        
+        # Configurações de trading
+        self.trading_enabled = TRADING_ENABLED
+        self.paper_trading = PAPER_TRADING
+        self.auto_trading = AUTO_TRADING
+        self.strategies = STRATEGIES
+        self.risk_management = RISK_MANAGEMENT
+        
+        # Configurações de cache
+        self.cache_symbols = CACHE_SYMBOLS
+        self.redis_cache_ttl = REDIS_CACHE_TTL
+        
+        # Configurações de otimização
+        self.smart_intervals = SMART_INTERVALS
+        self.batch_optimization = BATCH_OPTIMIZATION
+        self.concurrent_optimization = CONCURRENT_OPTIMIZATION
+        
+        # Configurações de monitoramento
+        self.monitoring_enabled = MONITORING_ENABLED
+        self.metrics_enabled = METRICS_ENABLED
+        self.health_check_enabled = HEALTH_CHECK_ENABLED
+        
+        # Configurações de relatórios
+        self.daily_report_enabled = DAILY_REPORT_ENABLED
+        self.daily_report_time = DAILY_REPORT_TIME
+        self.performance_metrics = PERFORMANCE_METRICS
+        
+        # Configurações de alertas
+        self.alerts_config = ALERTS_CONFIG
+        
+        # Configurações de backup
+        self.backup_enabled = BACKUP_ENABLED
+        self.backup_interval_hours = BACKUP_INTERVAL_HOURS
+        self.backup_retention_days = BACKUP_RETENTION_DAYS
+    
+    def get_database_url(self) -> str:
+        """Retorna URL de conexão do PostgreSQL"""
+        return get_database_url()
+    
+    def get_redis_url(self) -> str:
+        """Retorna URL de conexão do Redis"""
+        return get_redis_url()
+    
+    def get_websocket_url(self, market: str) -> str:
+        """Retorna URL do WebSocket para o mercado"""
+        return get_websocket_url(market)
+    
+    def get_api_base_url(self, market: str) -> str:
+        """Retorna URL base da API para o mercado"""
+        return get_api_base_url(market)
+    
+    def is_market_enabled(self, market: str) -> bool:
+        """Verifica se um mercado está habilitado"""
+        return is_market_enabled(market)
+    
+    def get_all_symbols(self) -> List[str]:
+        """Retorna todos os símbolos"""
+        return get_all_symbols()
+    
+    def get_symbols_for_market(self, market: str) -> List[str]:
+        """Retorna símbolos para um mercado"""
+        return get_symbols_for_market(market)
+
+# Instância global de settings para compatibilidade
+settings = Settings()
+
+# Configurações de banco e cache como objetos
+database_config = DatabaseConfig()
+redis_config = RedisConfig()
+
+# ================================
+# 🔧 VARIÁVEIS ADICIONAIS DE COMPATIBILIDADE
+# ================================
+
+# Para compatibilidade com imports antigos
+DATABASE_URL = get_database_url()
+REDIS_URL = get_redis_url()
+
+# Configurações de cache
+CACHE_TTL = REDIS_CACHE_TTL
+CACHE_PREFIX = "market_data:"
+CACHE_ENABLED = True
+
+# Configurações de monitoramento
+NOTIFICATION_ENABLED = False
+EMAIL_NOTIFICATIONS = False
+TELEGRAM_NOTIFICATIONS = False
+DISCORD_NOTIFICATIONS = False
+
+# Configurações de backup
+AUTO_BACKUP = BACKUP_ENABLED
+BACKUP_PATH = "backups/"
+
+# Configurações de API
+API_VERSION = "v1"
+API_PREFIX = "/api/v1"
+API_TITLE = "Crypto Signal Bot API"
+API_DESCRIPTION = "API para coleta e análise de dados de criptomoedas"
+
+# Configurações de CORS
+CORS_ENABLED = True
+CORS_ORIGINS = ["*"]
+CORS_METHODS = ["GET", "POST", "PUT", "DELETE"]
+CORS_HEADERS = ["*"]
+
+# Configurações de timeouts específicos
+HTTP_TIMEOUT = REQUEST_TIMEOUT
+WS_TIMEOUT = WEBSOCKET_TIMEOUT
+DB_TIMEOUT = POOL_TIMEOUT
+
+# Configurações de rate limiting
+RATE_LIMIT_PER_MINUTE = RATE_LIMIT_REQUESTS
+WEIGHT_LIMIT_PER_MINUTE = RATE_LIMIT_WEIGHT
+
+# ================================
+# 📋 CONFIGURAÇÕES FINAIS
+# ================================
+
+# Lista de otimizações ativas
+ACTIVE_OPTIMIZATIONS = [
+    "skip_existing_data",
+    "batch_size", 
+    "max_concurrent_requests",
+    "ignore_errors",
+    "cache_symbols",
+    "smart_intervals",
+    "batch_optimization",
+    "concurrent_optimization",
+    "memory_optimization"
+]
+
+# Configurações de saúde do sistema
+HEALTH_CHECK_CONFIG = {
+    "enabled": True,
+    "interval_seconds": 30,
+    "timeout_seconds": 10,
+    "max_failures": 3,
+    "endpoints": [
+        "/health",
+        "/health/database",
+        "/health/redis",
+        "/health/websocket"
+    ]
+}
+
+# Configurações de métricas
+METRICS_CONFIG = {
+    "enabled": True,
+    "endpoint": "/metrics",
+    "include_system_metrics": True,
+    "include_application_metrics": True,
+    "retention_days": 30
+}
+
+# Configurações de sistema
+SYSTEM_CONFIG = {
+    "max_memory_usage": 0.8,  # 80% da RAM
+    "max_cpu_usage": 0.9,     # 90% da CPU
+    "max_disk_usage": 0.85,   # 85% do disco
+    "cleanup_interval": 3600  # 1 hora
+}
+
+# Log de inicialização
+print("🧠 SISTEMA OTIMIZADO CARREGADO:")
+print(f"  📅 Dados históricos: {HISTORICAL_DAYS} dias ({HISTORICAL_DAYS/365:.1f} anos)")
+print(f"  🚀 Otimizações: {ACTIVE_OPTIMIZATIONS}")
+print(f"  🎯 Mercados habilitados: {ENABLED_MARKETS}")
+print(f"  🔧 Redis: {REDIS_HOST}:{REDIS_PORT}")
+print(f"  🗄️ PostgreSQL: {POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}")
+print(f"  🌍 Ambiente: {ENVIRONMENT}")
+print("✅ Settings e variáveis de compatibilidade carregadas!")

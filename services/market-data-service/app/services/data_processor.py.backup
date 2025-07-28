@@ -1,0 +1,150 @@
+from loguru import logger
+from typing import Dict, Any, List
+from datetime import datetime
+import asyncio
+from app.services.binance_client import BinanceClient
+from app.services.redis_publisher import RedisPublisher
+from app.models.market_data import DataType
+from app.config import settings
+
+class MarketDataProcessor:
+    def __init__(self):
+        self.binance_client = BinanceClient(data_processor=self)
+            api_key=settings.binance_api_key,
+            secret_key=settings.binance_secret_key,
+            testnet=settings.binance_testnet
+        )
+        self.redis_publisher = RedisPublisher(
+            host=settings.redis_host,
+            port=settings.redis_port,
+            db=settings.redis_db
+        )
+        self.is_running = False
+        
+    async def initialize(self):
+        """Inicializar todos os componentes"""
+        logger.info("Inicializando Market Data Processor...")
+        
+        binance_ok = await self.binance_client.initialize()
+        redis_ok = await self.redis_publisher.initialize()
+        
+        if binance_ok and redis_ok:
+            logger.info("Market Data Processor inicializado com sucesso")
+            return True
+        else:
+            logger.error("Falha na inicialização do Market Data Processor")
+            return False
+    
+    async def process_kline_message(self, message: Dict[str, Any]):
+        """Processar mensagem de kline do WebSocket"""
+        try:
+            kline_data = message['k']
+            
+            processed_data = {
+                'symbol': kline_data['s'],
+                'interval': kline_data['i'],
+                'open_time': datetime.fromtimestamp(kline_data['t'] / 1000),
+                'close_time': datetime.fromtimestamp(kline_data['T'] / 1000),
+                'open_price': float(kline_data['o']),
+                'high_price': float(kline_data['h']),
+                'low_price': float(kline_data['l']),
+                'close_price': float(kline_data['c']),
+                'volume': float(kline_data['v']),
+                'quote_volume': float(kline_data['q']),
+                'trades_count': int(kline_data['n']),
+                'taker_buy_base_volume': float(kline_data['V']),
+                'taker_buy_quote_volume': float(kline_data['Q']),
+                'is_closed': kline_data['x']  # True se o kline está fechado
+            }
+            
+            # Publicar apenas klines fechados para evitar ruído
+            if processed_data['is_closed']:
+                await self.redis_publisher.publish_market_data(
+                    data_type=DataType.KLINE,
+                    symbol=processed_data['symbol'],
+                    data=processed_data
+                )
+                
+        except Exception as e:
+            logger.error(f"Erro ao processar mensagem de kline: {e}")
+    
+    async def process_ticker_message(self, message: Dict[str, Any]):
+        """Processar mensagem de ticker do WebSocket"""
+        try:
+            processed_data = {
+                'symbol': message['s'],
+                'price_change': float(message['p']),
+                'price_change_percent': float(message['P']),
+                'weighted_avg_price': float(message['w']),
+                'prev_close_price': float(message['x']),
+                'last_price': float(message['c']),
+                'bid_price': float(message['b']),
+                'ask_price': float(message['a']),
+                'open_price': float(message['o']),
+                'high_price': float(message['h']),
+                'low_price': float(message['l']),
+                'volume': float(message['v']),
+                'quote_volume': float(message['q']),
+                'open_time': datetime.fromtimestamp(int(message['O']) / 1000),
+                'close_time': datetime.fromtimestamp(int(message['C']) / 1000),
+                'count': int(message['n'])
+            }
+            
+            await self.redis_publisher.publish_market_data(
+                data_type=DataType.TICKER,
+                symbol=processed_data['symbol'],
+                data=processed_data
+            )
+            
+        except Exception as e:
+            logger.error(f"Erro ao processar mensagem de ticker: {e}")
+    
+    async def start_data_collection(self):
+        """Iniciar coleta de dados para todos os pares configurados"""
+        if not await self.initialize():
+            return
+        
+        self.is_running = True
+        logger.info("Iniciando coleta de dados de mercado...")
+        
+        tasks = []
+        
+        # Iniciar streams para cada par de trading
+        for symbol in settings.trading_pairs:
+            # Stream de ticker (atualização em tempo real de preços)
+            ticker_task = asyncio.create_task(
+                self.binance_client.start_ticker_stream(
+                    symbol=symbol,
+                    callback=self.process_ticker_message
+                )
+            )
+            tasks.append(ticker_task)
+            
+            # Streams de klines para diferentes intervalos
+            for interval in settings.kline_intervals:
+                kline_task = asyncio.create_task(
+                    self.binance_client.start_kline_stream(
+                        symbol=symbol,
+                        interval=interval,
+                        callback=self.process_kline_message
+                    )
+                )
+                tasks.append(kline_task)
+        
+        # Aguardar todas as tarefas
+        try:
+            await asyncio.gather(*tasks)
+        except Exception as e:
+            logger.error(f"Erro na coleta de dados: {e}")
+        finally:
+            await self.stop()
+    
+    async def stop(self):
+        """Parar coleta de dados e fechar conexões"""
+        self.is_running = False
+        logger.info("Parando Market Data Processor...")
+        
+        await self.binance_client.close()
+        await self.redis_publisher.close()
+        
+        logger.info("Market Data Processor parado")

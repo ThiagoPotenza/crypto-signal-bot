@@ -1,0 +1,372 @@
+"""
+Configurações do sistema de coleta de dados
+Versão 4.1 - COLETA INTELIGENTE E OTIMIZADA
+Sistema de coleta única com otimização de recursos
+"""
+
+import os
+import sys
+from typing import Dict, List
+import aiohttp
+from loguru import logger
+
+# Configurações básicas
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
+POSTGRES_URL = os.getenv("POSTGRES_URL", "postgresql://postgres:postgres@postgres:5432/market_data")
+
+# Configurações de coleta OTIMIZADA
+INTERVALS = ['1m', '5m', '15m', '1h', '4h', '1d']
+HISTORICAL_DAYS = 3650  # 10 ANOS de dados históricos
+MAX_RETRIES = 3  # Máximo de tentativas por símbolo
+RETRY_DELAY = 5  # Segundos entre tentativas
+
+# Configurações de otimização
+OPTIMIZATION_CONFIG = {
+    'skip_existing_data': True,  # Pular dados já coletados
+    'batch_size': 100,  # Processar em lotes
+    'max_concurrent_requests': 10,  # Máximo de requisições simultâneas
+    'ignore_errors': True,  # Continuar mesmo com erros
+    'cache_symbols': True,  # Cache de símbolos válidos
+    'smart_intervals': True,  # Intervalos inteligentes baseados em dados existentes
+}
+
+# URLs da API Binance para diferentes mercados
+BINANCE_APIS = {
+    'spot': {
+        'rest': 'https://api.binance.com',
+        'ws': 'wss://stream.binance.com:9443/ws/',
+        'exchange_info': '/api/v3/exchangeInfo',
+        'klines': '/api/v3/klines'
+    },
+    'futures': {
+        'rest': 'https://fapi.binance.com',
+        'ws': 'wss://fstream.binance.com/ws/',
+        'exchange_info': '/fapi/v1/exchangeInfo',
+        'klines': '/fapi/v1/klines'
+    },
+    'coin_futures': {
+        'rest': 'https://dapi.binance.com',
+        'ws': 'wss://dstream.binance.com/ws/',
+        'exchange_info': '/dapi/v1/exchangeInfo',
+        'klines': '/dapi/v1/klines'
+    },
+    'options': {
+        'rest': 'https://eapi.binance.com',
+        'ws': 'wss://nbstream.binance.com/eoptions/ws/',
+        'exchange_info': '/eapi/v1/exchangeInfo',
+        'klines': '/eapi/v1/klines'
+    }
+}
+
+# Configurações por mercado OTIMIZADAS
+MARKET_CONFIG = {
+    'spot': {
+        'enabled': True,
+        'max_symbols': 150,
+        'intervals': ['1m', '5m', '15m', '1h', '4h', '1d'],
+        'streams': ['kline', 'ticker'],
+        'priority': 1,  # Prioridade de coleta
+        'min_volume_24h': 100000,  # Volume mínimo em USDT
+    },
+    'futures': {
+        'enabled': True,
+        'max_symbols': 150,
+        'intervals': ['1m', '5m', '15m', '1h', '4h', '1d'],
+        'streams': ['kline', 'ticker', 'markPrice'],
+        'priority': 2,
+        'min_volume_24h': 500000,  # Volume mínimo maior para futures
+    },
+    'coin_futures': {
+        'enabled': True,
+        'max_symbols': 50,
+        'intervals': ['1m', '5m', '15m', '1h', '4h', '1d'],
+        'streams': ['kline', 'ticker'],
+        'priority': 3,
+        'min_volume_24h': 50000,
+    },
+    'options': {
+        'enabled': False,  # Complexo, deixar para depois
+        'max_symbols': 20,
+        'intervals': ['5m', '15m', '1h'],
+        'streams': ['ticker'],
+        'priority': 4,
+        'min_volume_24h': 10000,
+    }
+}
+
+# Lista de símbolos para ignorar (conhecidos por dar problema)
+BLACKLIST_SYMBOLS = [
+    # Símbolos que frequentemente dão erro ou são descontinuados
+    'BCCUSDT', 'VENUSDT', 'HSRUSDT', 'MCOUSDT',
+    # Adicionar mais conforme necessário
+]
+
+async def get_exchange_symbols(market: str) -> List[str]:
+    """Buscar símbolos ativos com FILTROS INTELIGENTES"""
+    try:
+        if market not in BINANCE_APIS:
+            logger.warning(f"Mercado {market} não configurado")
+            return []
+        
+        if not MARKET_CONFIG.get(market, {}).get('enabled', False):
+            logger.info(f"Mercado {market} desabilitado")
+            return []
+        
+        api_config = BINANCE_APIS[market]
+        url = f"{api_config['rest']}{api_config['exchange_info']}"
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=15) as response:
+                if response.status != 200:
+                    if OPTIMIZATION_CONFIG['ignore_errors']:
+                        logger.warning(f"⚠️ Erro {response.status} em {market} - IGNORANDO e continuando")
+                        return []
+                    else:
+                        logger.error(f"Erro ao buscar símbolos {market}: {response.status}")
+                        return []
+                
+                data = await response.json()
+                symbols = []
+                
+                for symbol_info in data.get('symbols', []):
+                    symbol = symbol_info.get('symbol', '')
+                    status = symbol_info.get('status', '')
+                    
+                    # Pular símbolos na blacklist
+                    if symbol in BLACKLIST_SYMBOLS:
+                        continue
+                    
+                    # Filtros INTELIGENTES por mercado
+                    if market == 'spot':
+                        # SPOT: Focar em pares principais e com volume
+                        if (status == 'TRADING' and
+                            symbol_info.get('isSpotTradingAllowed', False)):
+                            symbols.append({
+                                'symbol': symbol,
+                                'volume': 0,  # Volume será obtido de outra fonte se necessário
+                                'count': 0
+                            })
+                    
+                    elif market == 'futures':
+                        # FUTURES: Apenas perpétuos com boa liquidez
+                        if (status == 'TRADING' and
+                            symbol_info.get('contractType') == 'PERPETUAL'):
+                            symbols.append({
+                                'symbol': symbol,
+                                'volume': 0,
+                                'count': 0
+                            })
+                    
+                    elif market == 'coin_futures':
+                        # COIN-M: Contratos principais
+                        if (status == 'TRADING' and
+                            symbol_info.get('contractType') == 'PERPETUAL'):
+                            symbols.append({
+                                'symbol': symbol,
+                                'volume': 0,
+                                'count': 0
+                            })
+                
+                # Ordenar alfabeticamente (já que volume não está disponível facilmente)
+                symbols.sort(key=lambda x: x['symbol'])
+                
+                # Limitar quantidade
+                max_symbols = MARKET_CONFIG[market]['max_symbols']
+                symbols = symbols[:max_symbols]
+                
+                # Extrair apenas os nomes dos símbolos
+                symbol_names = [s['symbol'] for s in symbols]
+                
+                logger.info(f"📊 {market.upper()}: {len(symbol_names)} símbolos OTIMIZADOS")
+                
+                # Log dos primeiros 10
+                if symbols:
+                    top_10 = [s['symbol'] for s in symbols[:10]]
+                    logger.info(f"  🏆 Primeiros 10: {', '.join(top_10)}")
+                
+                return symbol_names
+                
+    except Exception as e:
+        if OPTIMIZATION_CONFIG['ignore_errors']:
+            logger.warning(f"⚠️ Erro em {market}: {e} - IGNORANDO e continuando")
+            return []
+        else:
+            logger.error(f"❌ Erro ao buscar símbolos {market}: {e}")
+            return []
+
+async def get_all_symbols() -> Dict[str, List[str]]:
+    """Descoberta INTELIGENTE e OTIMIZADA de símbolos"""
+    try:
+        logger.info("🧠 DESCOBERTA INTELIGENTE de símbolos com OTIMIZAÇÃO...")
+        
+        all_symbols = {}
+        total_attempts = 0
+        total_success = 0
+        
+        # Processar mercados por ordem de prioridade
+        markets_by_priority = sorted(
+            BINANCE_APIS.keys(),
+            key=lambda m: MARKET_CONFIG.get(m, {}).get('priority', 999)
+        )
+        
+        for market in markets_by_priority:
+            if MARKET_CONFIG.get(market, {}).get('enabled', False):
+                total_attempts += 1
+                logger.info(f"🔎 Processando mercado {market.upper()} (prioridade {MARKET_CONFIG[market].get('priority', '?')})...")
+                
+                symbols = await get_exchange_symbols(market)
+                if symbols:
+                    all_symbols[market] = symbols
+                    total_success += 1
+                    logger.success(f"✅ {market.upper()}: {len(symbols)} símbolos coletados")
+                else:
+                    logger.warning(f"⚠️ {market.upper()}: Nenhum símbolo - IGNORANDO e continuando")
+        
+        # Estatísticas finais OTIMIZADAS
+        total_symbols = sum(len(symbols) for symbols in all_symbols.values())
+        success_rate = (total_success / total_attempts * 100) if total_attempts > 0 else 0
+        
+        logger.success(f"🎯 COLETA OTIMIZADA CONCLUÍDA:")
+        logger.success(f"  📊 {total_symbols} símbolos em {len(all_symbols)} mercados")
+        logger.success(f"  ✅ Taxa de sucesso: {success_rate:.1f}% ({total_success}/{total_attempts})")
+        logger.success(f"  🚀 Sistema otimizado para {HISTORICAL_DAYS} dias ({HISTORICAL_DAYS/365:.1f} anos)")
+        
+        # Resumo por mercado
+        for market, symbols in all_symbols.items():
+            priority = MARKET_CONFIG[market].get('priority', '?')
+            logger.info(f"  🏪 {market.upper()} (P{priority}): {len(symbols)} símbolos")
+        
+        return all_symbols
+        
+    except Exception as e:
+        logger.error(f"❌ Erro crítico na descoberta: {e}")
+        # Fallback MÍNIMO para garantir funcionamento
+        logger.warning("🔄 Usando fallback mínimo...")
+        return {
+            'futures': ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT']
+        }
+
+def get_websocket_url(market: str) -> str:
+    """Obter URL WebSocket para um mercado"""
+    return BINANCE_APIS.get(market, {}).get('ws', BINANCE_APIS['futures']['ws'])
+
+def get_market_intervals(market: str) -> List[str]:
+    """Obter intervalos suportados por um mercado"""
+    return MARKET_CONFIG.get(market, {}).get('intervals', ['1m', '5m', '1h'])
+
+def get_market_streams(market: str) -> List[str]:
+    """Obter tipos de stream suportados por um mercado"""
+    return MARKET_CONFIG.get(market, {}).get('streams', ['kline', 'ticker'])
+
+def should_skip_symbol(symbol: str, market: str) -> bool:
+    """Verificar se deve pular um símbolo (otimização)"""
+    if symbol in BLACKLIST_SYMBOLS:
+        return True
+    
+    # Adicionar mais lógicas de otimização aqui
+    # Por exemplo: verificar se já temos dados suficientes
+    
+    return False
+
+# Configurações de logging OTIMIZADAS
+logger.remove()
+logger.add(
+    sys.stdout,
+    format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+    level="INFO"
+)
+
+# Classe de configurações COMPLETA para compatibilidade
+class Settings:
+    """Classe de configurações COMPLETA para compatibilidade com todos os módulos"""
+    
+    # URLs básicas
+    REDIS_URL = REDIS_URL
+    POSTGRES_URL = POSTGRES_URL
+    
+    # Configurações de Redis (extraídas da URL)
+    REDIS_HOST = 'redis'
+    REDIS_PORT = 6379
+    REDIS_DB = 0
+    REDIS_PASSWORD = None
+    
+    # Configurações de PostgreSQL
+    POSTGRES_HOST = 'postgres'
+    POSTGRES_PORT = 5432
+    POSTGRES_USER = 'postgres'
+    POSTGRES_PASSWORD = 'postgres'
+    POSTGRES_DATABASE = 'market_data'
+    
+    # Configurações de coleta
+    SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT']  # Fallback
+    INTERVALS = INTERVALS
+    HISTORICAL_DAYS = HISTORICAL_DAYS
+    MAX_RETRIES = MAX_RETRIES
+    RETRY_DELAY = RETRY_DELAY
+    
+    # Configurações de WebSocket
+    WS_RECONNECT_DELAY = 5
+    WS_PING_INTERVAL = 20
+    WS_PING_TIMEOUT = 10
+    WS_MAX_RECONNECTS = 10
+    
+    # Configurações de API Binance
+    BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
+    BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
+    BINANCE_TESTNET = os.getenv("BINANCE_TESTNET", "false").lower() == "true"
+    
+    # Configurações de logging
+    LOG_LEVEL = "INFO"
+    LOG_FORMAT = "json"
+    LOG_FILE = "logs/market_data.log"
+    
+    # Configurações de performance
+    BATCH_SIZE = 100
+    MAX_CONCURRENT_REQUESTS = 10
+    REQUEST_TIMEOUT = 30
+    
+    # Configurações de cache
+    CACHE_TTL = 300  # 5 minutos
+    CACHE_ENABLED = True
+    
+    # Configurações de monitoramento
+    HEALTH_CHECK_INTERVAL = 60
+    METRICS_ENABLED = True
+    
+    # Configurações de segurança
+    RATE_LIMIT_REQUESTS = 1200  # Por minuto
+    RATE_LIMIT_WINDOW = 60
+    
+    # Configurações de dados
+    DATA_RETENTION_DAYS = HISTORICAL_DAYS
+    COMPRESS_OLD_DATA = True
+    BACKUP_ENABLED = False
+
+# Instância global para compatibilidade
+settings = Settings()
+
+# Log da configuração otimizada
+logger.info("🧠 SISTEMA OTIMIZADO CARREGADO:")
+logger.info(f"  📅 Dados históricos: {HISTORICAL_DAYS} dias ({HISTORICAL_DAYS/365:.1f} anos)")
+logger.info(f"  🚀 Otimizações: {list(OPTIMIZATION_CONFIG.keys())}")
+logger.info(f"  🎯 Mercados habilitados: {[m for m, c in MARKET_CONFIG.items() if c.get('enabled')]}")
+logger.info(f"  🔧 Redis: {settings.REDIS_HOST}:{settings.REDIS_PORT}")
+logger.info(f"  🗄️ PostgreSQL: {settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}")
+
+# Exportar funções e objetos principais
+__all__ = [
+    'get_all_symbols',
+    'get_exchange_symbols', 
+    'get_websocket_url',
+    'get_market_intervals',
+    'get_market_streams',
+    'should_skip_symbol',
+    'settings',
+    'BINANCE_APIS',
+    'MARKET_CONFIG',
+    'OPTIMIZATION_CONFIG',
+    'BLACKLIST_SYMBOLS',
+    'INTERVALS',
+    'HISTORICAL_DAYS',
+    'Settings'
+]

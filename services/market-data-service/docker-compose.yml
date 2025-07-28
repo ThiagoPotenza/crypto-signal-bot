@@ -1,0 +1,122 @@
+version: '3.8'
+
+networks:
+  crypto-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+
+services:
+  # PostgreSQL Database
+  postgres-market-data:
+    image: postgres:15-alpine
+    container_name: postgres-market-data
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: market_data
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5433:5432"
+    networks:
+      - crypto-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d market_data"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Redis Cache
+  redis-market-data:
+    image: redis:7-alpine
+    container_name: redis-market-data
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ""
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - crypto-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Market Data Service
+  market-data-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: market-data-service
+    restart: unless-stopped
+    environment:
+      # Database
+      POSTGRES_HOST: postgres-market-data
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: market_data
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+      
+      # Redis
+      REDIS_HOST: redis-market-data
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      
+      # Application
+      ENVIRONMENT: development
+      LOG_LEVEL: INFO
+      
+      # Binance API (opcional)
+      BINANCE_API_KEY: ""
+      BINANCE_SECRET_KEY: ""
+      
+      # JWT
+      JWT_SECRET: crypto-signal-bot-secret-key-2025
+    volumes:
+      - ./app:/app/app:ro
+      - ./logs:/app/logs
+    ports:
+      - "8000:8000"
+    networks:
+      - crypto-network
+    depends_on:
+      postgres-market-data:
+        condition: service_healthy
+      redis-market-data:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Redis Commander (Interface Web)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: redis-commander
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis-market-data:6379
+      HTTP_USER: admin
+      HTTP_PASSWORD: admin123
+    ports:
+      - "8081:8081"
+    networks:
+      - crypto-network
+    depends_on:
+      - redis-market-data
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8081"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

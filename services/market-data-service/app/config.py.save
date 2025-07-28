@@ -1,0 +1,57 @@
+"""
+Configurações do Market Data Service
+"""
+
+import os
+from typing import List
+from pydantic import BaseSettings
+
+
+class Settings(BaseSettings):
+    """Configurações da aplicação"""
+    
+    # Configurações da API
+    API_HOST: str = "0.0.0.0"
+    API_PORT: int = 8000
+    DEBUG: bool = True
+    
+    # Configurações do Redis
+    REDIS_HOST: str = "redis"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
+    REDIS_PASSWORD: str = ""
+    
+    # Configurações da Binance
+    BINANCE_API_KEY: str = ""
+    BINANCE_SECRET_KEY: str = ""
+    BINANCE_TESTNET: bool = True
+    
+    # Pares monitorados
+    MONITORED_PAIRS: List[str] = [
+        "BTCUSDT",
+        "ETHUSDT", 
+        "ADAUSDT",
+        "BNBUSDT"
+    ]
+    
+    # Intervalos de kline
+    KLINE_INTERVALS: List[str] = [
+        "1m",
+        "5m", 
+        "15m",
+        "1h",
+        "4h",
+        "1d"
+    ]
+    
+    # Configurações de logging
+    LOG_LEVEL: str = "INFO"
+    LOG_FORMAT: str = "{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} - {message}"
+    
+    class Config:
+        env_file = ".env"
+        case_sensitive = True
+
+
+# Instância global das configurações
+settings = Settings()
